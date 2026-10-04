@@ -5,6 +5,9 @@ export interface FileNode {
   name: string; // e.g. "index.html"
   type: 'file';
   content: string;
+  /** Text files default to utf8; imported binary assets may be stored as base64. */
+  encoding?: 'utf8' | 'base64';
+  mimeType?: string;
 }
 
 export interface FolderNode {
