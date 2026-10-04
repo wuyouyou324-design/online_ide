@@ -3,7 +3,6 @@ import { normalizePath } from './filesystem';
 
 export interface GeneratedPreview {
   html: string;
-  blobUrls: string[];
   error?: string;
 }
 
@@ -35,8 +34,9 @@ export function getLanguageForFile(filePath: string): string {
 }
 
 /**
- * Resolves HTML entry point (e.g. /index.html) and creates Blob URLs for CSS and JS files
- * referenced by relative paths in the HTML document.
+ * Generates a self-contained HTML document for the preview iframe.
+ * Local CSS and JavaScript are inlined so the sandbox does not need to load
+ * Blob URLs created by the parent document.
  */
 export function generatePreviewHtml(
   items: Record<string, FSItem>,
@@ -48,82 +48,140 @@ export function generatePreviewHtml(
   if (!entryFile || entryFile.type !== 'file') {
     return {
       html: `<!DOCTYPE html><html><body><div style="font-family:sans-serif; padding:1rem; color:#ef4444;">Entry file "${entryPath}" not found. Create index.html to preview your project.</div></body></html>`,
-      blobUrls: [],
       error: `Entry file "${entryPath}" not found`,
     };
   }
 
-  let htmlContent = entryFile.content;
-  const createdBlobUrls: string[] = [];
-
   try {
     const parser = new DOMParser();
-    const doc = parser.parseFromString(htmlContent, 'text/html');
+    const doc = parser.parseFromString(entryFile.content, 'text/html');
 
-    // 1. Process <link rel="stylesheet" href="...">
-    const links = Array.from(doc.querySelectorAll('link[rel="stylesheet"]'));
-    links.forEach((link) => {
-      const href = link.getAttribute('href');
-      if (href && !href.startsWith('http://') && !href.startsWith('https://') && !href.startsWith('//') && !href.startsWith('data:')) {
-        const resolvedPath = resolveRelativePath(normEntryPath, href);
-        const cssFile = items[resolvedPath];
-        if (cssFile && cssFile.type === 'file') {
-          const blob = new Blob([cssFile.content], { type: 'text/css' });
-          const blobUrl = URL.createObjectURL(blob);
-          createdBlobUrls.push(blobUrl);
-          link.setAttribute('href', blobUrl);
-        }
-      }
-    });
-
-    // 2. Process <script src="...">
-    const scripts = Array.from(doc.querySelectorAll('script[src]'));
-    scripts.forEach((script) => {
-      const src = script.getAttribute('src');
-      if (src && !src.startsWith('http://') && !src.startsWith('https://') && !src.startsWith('//') && !src.startsWith('data:')) {
-        const resolvedPath = resolveRelativePath(normEntryPath, src);
-        const jsFile = items[resolvedPath];
-        if (jsFile && jsFile.type === 'file') {
-          const blob = new Blob([jsFile.content], { type: 'text/javascript' });
-          const blobUrl = URL.createObjectURL(blob);
-          createdBlobUrls.push(blobUrl);
-          script.setAttribute('src', blobUrl);
-        }
-      }
-    });
-
-    // 3. Process <img src="...">
-    const images = Array.from(doc.querySelectorAll('img[src]'));
-    images.forEach((img) => {
-      const src = img.getAttribute('src');
-      if (src && !src.startsWith('http://') && !src.startsWith('https://') && !src.startsWith('//') && !src.startsWith('data:')) {
-        const resolvedPath = resolveRelativePath(normEntryPath, src);
-        const imgFile = items[resolvedPath];
-        if (imgFile && imgFile.type === 'file') {
-          const mimeType = getMimeType(resolvedPath);
-          const blob = new Blob([imgFile.content], { type: mimeType });
-          const blobUrl = URL.createObjectURL(blob);
-          createdBlobUrls.push(blobUrl);
-          img.setAttribute('src', blobUrl);
-        }
-      }
-    });
+    inlineLocalStylesheets(doc, items, normEntryPath);
+    inlineLocalScripts(doc, items, normEntryPath);
+    inlineLocalSvgImages(doc, items, normEntryPath);
 
     const resultHtml = doc.doctype
-      ? `<!DOCTYPE ${doc.doctype.name}>` + doc.documentElement.outerHTML
+      ? `<!DOCTYPE ${doc.doctype.name}>${doc.documentElement.outerHTML}`
       : doc.documentElement.outerHTML;
 
+    return { html: resultHtml };
+  } catch (err: unknown) {
     return {
-      html: resultHtml,
-      blobUrls: createdBlobUrls,
-    };
-  } catch (err: any) {
-    return {
-      html: htmlContent,
-      blobUrls: createdBlobUrls,
-      error: err?.message || 'Failed to parse HTML for preview',
+      html: entryFile.content,
+      error: err instanceof Error
+        ? err.message
+        : 'Failed to parse HTML for preview',
     };
   }
+}
+
+function inlineLocalStylesheets(
+  doc: Document,
+  items: Record<string, FSItem>,
+  entryPath: string
+): void {
+  const links = Array.from(
+    doc.querySelectorAll<HTMLLinkElement>('link[rel="stylesheet"]')
+  );
+
+  links.forEach((link) => {
+    const href = link.getAttribute('href');
+    if (!href || !isLocalReference(href)) return;
+
+    const resolvedPath = resolveRelativePath(entryPath, href);
+    const cssFile = items[resolvedPath];
+    if (!cssFile || cssFile.type !== 'file') return;
+
+    const style = doc.createElement('style');
+    for (const attribute of Array.from(link.attributes)) {
+      if (attribute.name !== 'href' && attribute.name !== 'rel') {
+        style.setAttribute(attribute.name, attribute.value);
+      }
+    }
+    style.textContent = escapeStyleContent(cssFile.content);
+    link.replaceWith(style);
+  });
+}
+
+function inlineLocalScripts(
+  doc: Document,
+  items: Record<string, FSItem>,
+  entryPath: string
+): void {
+  const scripts = Array.from(
+    doc.querySelectorAll<HTMLScriptElement>('script[src]')
+  );
+
+  scripts.forEach((script) => {
+    const src = script.getAttribute('src');
+    if (!src || !isLocalReference(src)) return;
+
+    const resolvedPath = resolveRelativePath(entryPath, src);
+    const jsFile = items[resolvedPath];
+    if (!jsFile || jsFile.type !== 'file') return;
+
+    script.removeAttribute('src');
+    script.textContent = escapeScriptContent(jsFile.content);
+  });
+}
+
+function inlineLocalSvgImages(
+  doc: Document,
+  items: Record<string, FSItem>,
+  entryPath: string
+): void {
+  const images = Array.from(
+    doc.querySelectorAll<HTMLImageElement>('img[src]')
+  );
+
+  images.forEach((img) => {
+    const src = img.getAttribute('src');
+    if (!src || !isLocalReference(src)) return;
+
+    const resolvedPath = resolveRelativePath(entryPath, src);
+    const imgFile = items[resolvedPath];
+    if (!imgFile || imgFile.type !== 'file') return;
+
+    if (getMimeType(resolvedPath) === 'image/svg+xml') {
+      img.setAttribute(
+        'src',
+        encodeTextAsBase64DataUrl(imgFile.content, 'image/svg+xml')
+      );
+    }
+  });
+}
+
+function isLocalReference(value: string): boolean {
+  return (
+    !value.startsWith('http://') &&
+    !value.startsWith('https://') &&
+    !value.startsWith('//') &&
+    !value.startsWith('data:') &&
+    !value.startsWith('#')
+  );
+}
+
+/** Prevent user content from prematurely closing the inline script element. */
+function escapeScriptContent(content: string): string {
+  return content.replace(/<\/script/gi, '<\\/script');
+}
+
+/** Prevent user content from prematurely closing the inline style element. */
+function escapeStyleContent(content: string): string {
+  return content.replace(/<\/style/gi, '<\\/style');
+}
+
+function encodeTextAsBase64DataUrl(content: string, mimeType: string): string {
+  const bytes = new TextEncoder().encode(content);
+  let binary = '';
+  const chunkSize = 0x8000;
+
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    const chunk = bytes.subarray(index, index + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+
+  return `data:${mimeType};base64,${btoa(binary)}`;
 }
 
 /**
@@ -136,15 +194,12 @@ export function resolveRelativePath(baseFilePath: string, relativePath: string):
 
   const baseParts = baseFilePath.split('/').slice(0, -1); // remove filename
   const relParts = relativePath.split('/');
-
   const resultParts = [...baseParts];
 
   for (const part of relParts) {
     if (part === '.' || part === '') continue;
     if (part === '..') {
-      if (resultParts.length > 0) {
-        resultParts.pop();
-      }
+      if (resultParts.length > 0) resultParts.pop();
     } else {
       resultParts.push(part);
     }

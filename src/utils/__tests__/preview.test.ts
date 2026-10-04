@@ -8,13 +8,7 @@ import { DEFAULT_STARTER_FILES, FSItem } from '../../types/ide';
 
 describe('Preview Utility Engine', () => {
   beforeEach(() => {
-    // Mock URL.createObjectURL and URL.revokeObjectURL for jsdom environment
-    if (!global.URL.createObjectURL) {
-      global.URL.createObjectURL = vi.fn((_blob: Blob) => `blob:mock-url-${Math.random()}`);
-    }
-    if (!global.URL.revokeObjectURL) {
-      global.URL.revokeObjectURL = vi.fn();
-    }
+    vi.restoreAllMocks();
   });
 
   describe('resolveRelativePath', () => {
@@ -38,13 +32,16 @@ describe('Preview Utility Engine', () => {
   });
 
   describe('generatePreviewHtml', () => {
-    it('replaces style.css and script.js with blob URLs in starter project', () => {
+    it('inlines local CSS and JavaScript without creating Blob URLs', () => {
       const preview = generatePreviewHtml(DEFAULT_STARTER_FILES, '/index.html');
       expect(preview.error).toBeUndefined();
-      expect(preview.blobUrls.length).toBe(2);
-      expect(preview.html).toContain('blob:mock-url-');
+      expect(preview.html).toContain('<style>');
+      expect(preview.html).toContain('color: #2563eb;');
+      expect(preview.html).toContain('<script>');
+      expect(preview.html).toContain('Online IDE V1 Preview Loaded!');
       expect(preview.html).not.toContain('href="style.css"');
       expect(preview.html).not.toContain('src="script.js"');
+      expect(preview.html).not.toContain('blob:');
     });
 
     it('returns error HTML if entry point index.html does not exist', () => {
