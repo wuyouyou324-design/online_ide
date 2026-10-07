@@ -96,7 +96,7 @@ export default function App() {
     });
   };
 
-  const handleCreateFile = (parentPath: string, fileName: string) => {
+  const handleCreateFile = (parentPath: string, fileName: string): boolean => {
     try {
       const { items, newPath } = createFile(projectState.items, parentPath, fileName);
       setProjectState((prev) => ({
@@ -109,15 +109,17 @@ export default function App() {
         pendingSave: true,
         error: null,
       }));
+      return true;
     } catch (err: any) {
       setProjectState((prev) => ({
         ...prev,
         error: err.message || 'Failed to create file',
       }));
+      return false;
     }
   };
 
-  const handleCreateFolder = (parentPath: string, folderName: string) => {
+  const handleCreateFolder = (parentPath: string, folderName: string): boolean => {
     try {
       const { items } = createFolder(projectState.items, parentPath, folderName);
       setProjectState((prev) => ({
@@ -126,11 +128,13 @@ export default function App() {
         pendingSave: true,
         error: null,
       }));
+      return true;
     } catch (err: any) {
       setProjectState((prev) => ({
         ...prev,
         error: err.message || 'Failed to create folder',
       }));
+      return false;
     }
   };
 
@@ -157,7 +161,7 @@ export default function App() {
     }
   };
 
-  const handleRenameItem = (oldPath: string, newName: string) => {
+  const handleRenameItem = (oldPath: string, newName: string): boolean => {
     try {
       const { items, pathMap } = renameItem(projectState.items, oldPath, newName);
 
@@ -175,11 +179,13 @@ export default function App() {
         pendingSave: true,
         error: null,
       }));
+      return true;
     } catch (err: any) {
       setProjectState((prev) => ({
         ...prev,
         error: err.message || 'Failed to rename item',
       }));
+      return false;
     }
   };
 

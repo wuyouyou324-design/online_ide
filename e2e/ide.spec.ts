@@ -81,4 +81,33 @@ test.describe('Online IDE V1 E2E Workflows', () => {
     await expect(explorer.getByText('src')).toHaveCount(0);
     await expect(explorer.getByText('utils.js')).toHaveCount(0);
   });
+
+  test('resets new-item target after selected folder is renamed', async ({ page }) => {
+    const explorer = page.locator('.w-64');
+
+    await page.getByTitle('New folder in /').first().click();
+    await page.getByPlaceholder('folder-name').fill('src');
+    await page.getByRole('button', { name: 'Confirm' }).click();
+
+    await explorer.getByText('src').click();
+    await page.getByTitle('Rename src').click();
+    await page.getByPlaceholder('filename.ext').fill('app');
+    await page.getByRole('button', { name: 'Confirm' }).click();
+
+    await expect(page.getByTitle('New file in /')).toBeVisible();
+    await page.getByTitle('New file in /').first().click();
+    await page.getByPlaceholder('filename.ext').fill('root.js');
+    await page.getByRole('button', { name: 'Confirm' }).click();
+    await expect(explorer.getByText('root.js')).toBeVisible();
+  });
+
+  test('keeps the name modal open after validation fails', async ({ page }) => {
+    await page.getByTitle('New file in /').first().click();
+    await page.getByPlaceholder('filename.ext').fill('index.html');
+    await page.getByRole('button', { name: 'Confirm' }).click();
+
+    await expect(page.getByRole('heading', { name: 'New File in /' })).toBeVisible();
+    await expect(page.getByPlaceholder('filename.ext')).toHaveValue('index.html');
+    await expect(page.getByText(/already exists at this location/)).toBeVisible();
+  });
 });

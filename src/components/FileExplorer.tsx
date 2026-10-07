@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Folder,
   FolderOpen,
@@ -16,9 +16,9 @@ interface FileExplorerProps {
   items: Record<string, FSItem>;
   activeFilePath: string | null;
   onSelectFile: (path: string) => void;
-  onCreateFile: (parentPath: string, fileName: string) => void;
-  onCreateFolder: (parentPath: string, folderName: string) => void;
-  onRenameItem: (oldPath: string, newName: string) => void;
+  onCreateFile: (parentPath: string, fileName: string) => boolean;
+  onCreateFolder: (parentPath: string, folderName: string) => boolean;
+  onRenameItem: (oldPath: string, newName: string) => boolean;
   onDeleteItem: (targetPath: string) => void;
 }
 
@@ -40,6 +40,13 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
     initialValue?: string;
   } | null>(null);
   const [inputValue, setInputValue] = useState('');
+
+  // Keep the toolbar's target folder valid after a folder is renamed or deleted.
+  useEffect(() => {
+    if (selectedFolderForAction !== '/' && items[selectedFolderForAction]?.type !== 'folder') {
+      setSelectedFolderForAction('/');
+    }
+  }, [items, selectedFolderForAction]);
 
   const toggleFolder = (folderPath: string) => {
     setExpandedFolders((prev) => ({
@@ -84,17 +91,23 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
     if (!modalState) return;
 
     try {
+      let succeeded = false;
       if (modalState.type === 'create-file' && modalState.parentPath) {
-        onCreateFile(modalState.parentPath, inputValue);
+        succeeded = onCreateFile(modalState.parentPath, inputValue);
       } else if (modalState.type === 'create-folder' && modalState.parentPath) {
-        onCreateFolder(modalState.parentPath, inputValue);
-        setExpandedFolders((prev) => ({ ...prev, [modalState.parentPath!]: true }));
+        succeeded = onCreateFolder(modalState.parentPath, inputValue);
+        if (succeeded) {
+          setExpandedFolders((prev) => ({ ...prev, [modalState.parentPath!]: true }));
+        }
       } else if (modalState.type === 'rename' && modalState.targetPath) {
-        onRenameItem(modalState.targetPath, inputValue);
+        succeeded = onRenameItem(modalState.targetPath, inputValue);
       } else if (modalState.type === 'delete-confirm' && modalState.targetPath) {
         onDeleteItem(modalState.targetPath);
+        succeeded = true;
       }
-      setModalState(null);
+      if (succeeded) {
+        setModalState(null);
+      }
     } catch (err) {
       // Handled at top level state error handler
     }
