@@ -109,9 +109,30 @@ describe('FileSystem and Project State Utilities', () => {
       expect(res2.items['/src/main.ts']).toBeDefined();
     });
 
+    it('throws error when creating folder with invalid name or duplicate', () => {
+      expect(() => createFolder(DEFAULT_STARTER_FILES, '/', '   ')).toThrow(/empty/);
+      expect(() => createFolder(DEFAULT_STARTER_FILES, '/', 'a/b')).toThrow(/slashes/);
+      const res1 = createFolder(DEFAULT_STARTER_FILES, '/', 'src');
+      expect(() => createFolder(res1.items, '/', 'src')).toThrow(/already exists/);
+      expect(() => createFile(DEFAULT_STARTER_FILES, '/nonexistent', 'test.js')).toThrow(/does not exist/);
+      expect(() => createFolder(DEFAULT_STARTER_FILES, '/nonexistent', 'sub')).toThrow(/does not exist/);
+    });
+
     it('updates file content', () => {
       const updatedItems = updateFileContent(DEFAULT_STARTER_FILES, '/index.html', '<h1>Updated</h1>');
       expect((updatedItems['/index.html'] as any).content).toBe('<h1>Updated</h1>');
+      expect(() => updateFileContent(DEFAULT_STARTER_FILES, '/missing.txt', 'test')).toThrow(/does not exist/);
+    });
+
+    it('throws error when renaming invalid item', () => {
+      expect(() => renameItem(DEFAULT_STARTER_FILES, '/index.html', '   ')).toThrow(/empty/);
+      expect(() => renameItem(DEFAULT_STARTER_FILES, '/index.html', 'a/b')).toThrow(/slashes/);
+      expect(() => renameItem(DEFAULT_STARTER_FILES, '/missing.txt', 'new.txt')).toThrow(/does not exist/);
+      expect(() => renameItem(DEFAULT_STARTER_FILES, '/index.html', 'style.css')).toThrow(/already exists/);
+    });
+
+    it('throws error when deleting non-existent item', () => {
+      expect(() => deleteItem(DEFAULT_STARTER_FILES, '/nonexistent.txt')).toThrow(/does not exist/);
     });
 
     it('renames file correctly', () => {
