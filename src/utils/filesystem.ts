@@ -33,10 +33,19 @@ export function getInitialProjectState(): ProjectState {
     if (saved) {
       const parsed = JSON.parse(saved);
       if (parsed && typeof parsed === 'object' && parsed.items) {
+        const items = parsed.items;
+        const rawOpenPaths: string[] = Array.isArray(parsed.openFilePaths) ? parsed.openFilePaths : [];
+        const openFilePaths = rawOpenPaths.filter((p) => items[p] && items[p].type === 'file');
+
+        let activeFilePath = parsed.activeFilePath;
+        if (!activeFilePath || !items[activeFilePath] || items[activeFilePath].type !== 'file') {
+          activeFilePath = openFilePaths.length > 0 ? openFilePaths[0] : (items['/index.html'] ? '/index.html' : null);
+        }
+
         return {
-          items: parsed.items,
-          activeFilePath: parsed.activeFilePath || '/index.html',
-          openFilePaths: parsed.openFilePaths || ['/index.html'],
+          items,
+          activeFilePath,
+          openFilePaths,
           pendingSave: false,
           lastSavedAt: parsed.lastSavedAt || Date.now(),
           error: null,
