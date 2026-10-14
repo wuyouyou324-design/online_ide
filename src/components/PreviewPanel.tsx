@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useRef, useEffect } from 'react';
 import { FSItem } from '../types/ide';
 import { generatePreviewHtml } from '../utils/preview';
 import { Play } from 'lucide-react';
@@ -12,10 +12,34 @@ export const PreviewPanel: React.FC<PreviewPanelProps> = ({
   items,
   entryPath = '/index.html',
 }) => {
-  const preview = useMemo(
-    () => generatePreviewHtml(items, entryPath),
-    [items, entryPath]
-  );
+  const activeBlobUrlsRef = useRef<string[]>([]);
+
+  // Revoke previous Blob URLs when new preview is generated
+  const preview = useMemo(() => {
+    activeBlobUrlsRef.current.forEach((url) => {
+      try {
+        URL.revokeObjectURL(url);
+      } catch {
+        // ignore
+      }
+    });
+    const res = generatePreviewHtml(items, entryPath);
+    activeBlobUrlsRef.current = res.createdBlobUrls || [];
+    return res;
+  }, [items, entryPath]);
+
+  // Clean up Blob URLs on unmount
+  useEffect(() => {
+    return () => {
+      activeBlobUrlsRef.current.forEach((url) => {
+        try {
+          URL.revokeObjectURL(url);
+        } catch {
+          // ignore
+        }
+      });
+    };
+  }, []);
 
   return (
     <div className="flex h-full w-full flex-col border-t border-gray-800 bg-gray-950">
