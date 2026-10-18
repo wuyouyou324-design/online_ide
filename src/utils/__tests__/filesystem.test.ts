@@ -163,4 +163,57 @@ describe('FileSystem and Project State Utilities', () => {
       expect(deletedPaths).toContain('/src/sub/b.js');
     });
   });
+
+  describe('Tabs & Project State Management', () => {
+    it('preserves contents when switching active files and editing multiple files', () => {
+      let items = DEFAULT_STARTER_FILES;
+      items = updateFileContent(items, '/index.html', '<h1>Edited Index</h1>');
+      items = updateFileContent(items, '/style.css', 'body { color: red; }');
+
+      expect((items['/index.html'] as any).content).toBe('<h1>Edited Index</h1>');
+      expect((items['/style.css'] as any).content).toBe('body { color: red; }');
+    });
+
+    it('manages opening tabs and active file selection correctly', () => {
+      const state: ProjectState = {
+        items: DEFAULT_STARTER_FILES,
+        activeFilePath: '/index.html',
+        openFilePaths: ['/index.html'],
+        pendingSave: false,
+        lastSavedAt: Date.now(),
+        error: null,
+      };
+
+      // Open script.js tab
+      const nextOpenTabs = state.openFilePaths.includes('/script.js')
+        ? state.openFilePaths
+        : [...state.openFilePaths, '/script.js'];
+      const nextState: ProjectState = {
+        ...state,
+        openFilePaths: nextOpenTabs,
+        activeFilePath: '/script.js',
+      };
+
+      expect(nextState.openFilePaths).toEqual(['/index.html', '/script.js']);
+      expect(nextState.activeFilePath).toBe('/script.js');
+    });
+
+    it('manages closing tabs and falls back active file path appropriately', () => {
+      const state: ProjectState = {
+        items: DEFAULT_STARTER_FILES,
+        activeFilePath: '/script.js',
+        openFilePaths: ['/index.html', '/style.css', '/script.js'],
+        pendingSave: false,
+        lastSavedAt: Date.now(),
+        error: null,
+      };
+
+      // Close active tab /script.js
+      const openFilePaths = state.openFilePaths.filter((p) => p !== '/script.js');
+      const activeFilePath = openFilePaths[openFilePaths.length - 1];
+
+      expect(openFilePaths).toEqual(['/index.html', '/style.css']);
+      expect(activeFilePath).toBe('/style.css');
+    });
+  });
 });
