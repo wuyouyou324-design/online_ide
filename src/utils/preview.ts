@@ -3,6 +3,7 @@ import { normalizePath } from './filesystem';
 
 export interface GeneratedPreview {
   html: string;
+  blobUrls: string[];
   error?: string;
 }
 
@@ -19,38 +20,85 @@ export function getLanguageForFile(filePath: string): string {
   }
 }
 
-/** Generates a self-contained HTML document for the preview iframe. */
+/** Creates a Blob URL for a file node or string content, registering it in blobUrls list for cleanup. */
+export function createBlobUrl(
+  content: BlobPart,
+  mimeType: string,
+  blobUrls: string[]
+): string {
+  if (typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function') {
+    const blob = new Blob([content], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    blobUrls.push(url);
+    return url;
+  }
+  const fakeId = blobUrls.length + 1;
+  const fallbackUrl = `blob:mock-url-${fakeId}`;
+  blobUrls.push(fallbackUrl);
+  return fallbackUrl;
+}
+
+export function createBlobUrlForFile(
+  file: FileNode,
+  filePath: string,
+  blobUrls: string[]
+): string {
+  const mimeType = file.mimeType || getMimeType(filePath);
+  if (file.encoding === 'base64') {
+    try {
+      const binary = atob(file.content);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i);
+      }
+      return createBlobUrl(bytes, mimeType, blobUrls);
+    } catch {
+      return createBlobUrl(file.content, mimeType, blobUrls);
+    }
+  }
+  return createBlobUrl(file.content, mimeType, blobUrls);
+}
+
+/** Generates an HTML document with Blob URLs for local CSS, JS, and image assets. */
 export function generatePreviewHtml(
   items: Record<string, FSItem>,
   entryPath = '/index.html'
 ): GeneratedPreview {
+  const blobUrls: string[] = [];
   const normEntryPath = normalizePath(entryPath);
   const entryFile = items[normEntryPath];
   if (!entryFile || entryFile.type !== 'file') {
     return {
       html: `<!DOCTYPE html><html><body><div style="font-family:sans-serif; padding:1rem; color:#ef4444;">Entry file "${entryPath}" not found. Create index.html to preview your project.</div></body></html>`,
+      blobUrls,
       error: `Entry file "${entryPath}" not found`,
     };
   }
 
   try {
     const doc = new DOMParser().parseFromString(entryFile.content, 'text/html');
-    inlineLocalStylesheets(doc, items, normEntryPath);
-    inlineLocalScripts(doc, items, normEntryPath);
-    inlineLocalHtmlAssets(doc, items, normEntryPath);
+    resolveLocalStylesheets(doc, items, normEntryPath, blobUrls);
+    resolveLocalScripts(doc, items, normEntryPath, blobUrls);
+    resolveLocalHtmlAssets(doc, items, normEntryPath, blobUrls);
     const resultHtml = doc.doctype
       ? `<!DOCTYPE ${doc.doctype.name}>${doc.documentElement.outerHTML}`
       : doc.documentElement.outerHTML;
-    return { html: resultHtml };
+    return { html: resultHtml, blobUrls };
   } catch (err: unknown) {
     return {
       html: entryFile.content,
+      blobUrls,
       error: err instanceof Error ? err.message : 'Failed to parse HTML for preview',
     };
   }
 }
 
-function inlineLocalStylesheets(doc: Document, items: Record<string, FSItem>, entryPath: string): void {
+function resolveLocalStylesheets(
+  doc: Document,
+  items: Record<string, FSItem>,
+  entryPath: string,
+  blobUrls: string[]
+): void {
   const links = Array.from(doc.querySelectorAll<HTMLLinkElement>('link[rel="stylesheet"]'));
   links.forEach((link) => {
     const href = link.getAttribute('href');
@@ -58,20 +106,24 @@ function inlineLocalStylesheets(doc: Document, items: Record<string, FSItem>, en
     const resolvedPath = resolveRelativePath(entryPath, href);
     const cssFile = getFile(items, resolvedPath);
     if (!cssFile) return;
-    const style = doc.createElement('style');
-    for (const attribute of Array.from(link.attributes)) {
-      if (attribute.name !== 'href' && attribute.name !== 'rel') style.setAttribute(attribute.name, attribute.value);
-    }
-    style.textContent = escapeStyleContent(inlineCss(cssFile.content, resolvedPath, items, new Set()));
-    link.replaceWith(style);
+
+    const processedCss = processCssContent(cssFile.content, resolvedPath, items, blobUrls, new Set());
+    const cssBlobUrl = createBlobUrl(processedCss, 'text/css', blobUrls);
+    link.setAttribute('href', cssBlobUrl);
   });
 }
 
-function inlineCss(content: string, filePath: string, items: Record<string, FSItem>, stack: Set<string>): string {
+function processCssContent(
+  content: string,
+  filePath: string,
+  items: Record<string, FSItem>,
+  blobUrls: string[],
+  stack: Set<string>
+): string {
   if (stack.has(filePath)) return '';
   const nextStack = new Set(stack).add(filePath);
 
-  // Inline local @imports. Preserve media conditions by wrapping imported CSS.
+  // Process local @imports
   let result = content.replace(/@import\s+(?:url\(\s*)?(?:["']([^"']+)["']|([^\s)"']+))\s*\)?\s*([^;]*);/gi,
     (match, quotedUrl: string | undefined, bareUrl: string | undefined, media: string) => {
       const reference = quotedUrl || bareUrl;
@@ -79,21 +131,27 @@ function inlineCss(content: string, filePath: string, items: Record<string, FSIt
       const importedPath = resolveRelativePath(filePath, reference);
       const imported = getFile(items, importedPath);
       if (!imported) return match;
-      const css = inlineCss(imported.content, importedPath, items, nextStack);
+      const css = processCssContent(imported.content, importedPath, items, blobUrls, nextStack);
       return media.trim() ? `@media ${media.trim()} {\n${css}\n}` : css;
     });
 
-  // Replace local CSS resources (images, fonts, etc.) with data URLs.
+  // Replace local CSS resources (images, fonts, etc.) with Blob URLs.
   return result.replace(/url\(\s*(["']?)([^"')]+)\1\s*\)/gi, (match, _quote: string, reference: string) => {
     if (!isLocalReference(reference)) return match;
     const assetPath = resolveRelativePath(filePath, reference);
     const asset = getFile(items, assetPath);
-    const dataUrl = asset && encodeFileAsDataUrl(asset, assetPath);
-    return dataUrl ? `url("${dataUrl}")` : match;
+    if (!asset) return match;
+    const blobUrl = createBlobUrlForFile(asset, assetPath, blobUrls);
+    return `url("${blobUrl}")`;
   });
 }
 
-function inlineLocalScripts(doc: Document, items: Record<string, FSItem>, entryPath: string): void {
+function resolveLocalScripts(
+  doc: Document,
+  items: Record<string, FSItem>,
+  entryPath: string,
+  blobUrls: string[]
+): void {
   const scripts = Array.from(doc.querySelectorAll<HTMLScriptElement>('script[src]'));
   scripts.forEach((script) => {
     const src = script.getAttribute('src');
@@ -101,11 +159,11 @@ function inlineLocalScripts(doc: Document, items: Record<string, FSItem>, entryP
     const resolvedPath = resolveRelativePath(entryPath, src);
     const jsFile = getFile(items, resolvedPath);
     if (!jsFile) return;
+
     const isModule = script.getAttribute('type') === 'module';
-    script.removeAttribute('src');
-    script.textContent = escapeScriptContent(
-      rewriteJavaScriptReferences(jsFile.content, resolvedPath, items, isModule, new Set())
-    );
+    const processedJs = rewriteJavaScriptReferences(jsFile.content, resolvedPath, items, isModule, blobUrls, new Set());
+    const jsBlobUrl = createBlobUrl(processedJs, 'text/javascript', blobUrls);
+    script.setAttribute('src', jsBlobUrl);
   });
 }
 
@@ -114,6 +172,7 @@ function rewriteJavaScriptReferences(
   filePath: string,
   items: Record<string, FSItem>,
   rewriteImports: boolean,
+  blobUrls: string[],
   stack: Set<string>
 ): string {
   const replaceReference = (reference: string, asModule: boolean): string => {
@@ -123,24 +182,27 @@ function rewriteJavaScriptReferences(
     if (!asset) return reference;
     if (asModule && isJavaScriptPath(assetPath)) {
       if (stack.has(assetPath)) return reference;
-      const nested = rewriteJavaScriptReferences(asset.content, assetPath, items, true, new Set(stack).add(filePath));
-      return encodeTextAsBase64DataUrl(nested, 'text/javascript');
+      const nested = rewriteJavaScriptReferences(asset.content, assetPath, items, true, blobUrls, new Set(stack).add(filePath));
+      return createBlobUrl(nested, 'text/javascript', blobUrls);
     }
-    return encodeFileAsDataUrl(asset, assetPath) || reference;
+    return createBlobUrlForFile(asset, assetPath, blobUrls);
   };
 
   let result = content;
   if (rewriteImports) {
-    // Covers static imports, export-from, and dynamic import() with string literals.
     result = result.replace(/(\b(?:from\s*|import\s*\(?\s*))(["'])([^"']+)\2/g,
       (_match, prefix: string, quote: string, reference: string) => `${prefix}${quote}${replaceReference(reference, true)}${quote}`);
   }
-  // fetch() of a local text/JSON asset remains functional inside the iframe.
   return result.replace(/(\bfetch\s*\(\s*)(["'])([^"']+)\2/g,
     (_match, prefix: string, quote: string, reference: string) => `${prefix}${quote}${replaceReference(reference, false)}${quote}`);
 }
 
-function inlineLocalHtmlAssets(doc: Document, items: Record<string, FSItem>, entryPath: string): void {
+function resolveLocalHtmlAssets(
+  doc: Document,
+  items: Record<string, FSItem>,
+  entryPath: string,
+  blobUrls: string[]
+): void {
   const elements = Array.from(doc.querySelectorAll<HTMLElement>('[src], [href]'));
   elements.forEach((element) => {
     if (element.tagName.toLowerCase() === 'script' ||
@@ -150,8 +212,10 @@ function inlineLocalHtmlAssets(doc: Document, items: Record<string, FSItem>, ent
     if (!reference || !isLocalReference(reference)) return;
     const assetPath = resolveRelativePath(entryPath, reference);
     const asset = getFile(items, assetPath);
-    const dataUrl = asset && encodeFileAsDataUrl(asset, assetPath);
-    if (dataUrl && (element.tagName.toLowerCase() === 'img' || isImagePath(assetPath))) element.setAttribute(attribute, dataUrl);
+    if (asset && (element.tagName.toLowerCase() === 'img' || isImagePath(assetPath))) {
+      const blobUrl = createBlobUrlForFile(asset, assetPath, blobUrls);
+      element.setAttribute(attribute, blobUrl);
+    }
   });
 }
 
@@ -171,22 +235,6 @@ export function stripUrlSuffix(value: string): string {
 
 function decodePath(value: string): string {
   try { return decodeURIComponent(value); } catch { return value; }
-}
-
-function escapeScriptContent(content: string): string { return content.replace(/<\/script/gi, '<\\/script'); }
-function escapeStyleContent(content: string): string { return content.replace(/<\/style/gi, '<\\/style'); }
-
-function encodeFileAsDataUrl(file: FileNode, filePath: string): string | undefined {
-  const mimeType = file.mimeType || getMimeType(filePath);
-  if (file.encoding === 'base64') return `data:${mimeType};base64,${file.content}`;
-  return encodeTextAsBase64DataUrl(file.content, mimeType);
-}
-
-function encodeTextAsBase64DataUrl(content: string, mimeType: string): string {
-  const bytes = new TextEncoder().encode(content);
-  let binary = '';
-  for (let index = 0; index < bytes.length; index += 0x8000) binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000));
-  return `data:${mimeType};base64,${btoa(binary)}`;
 }
 
 export function resolveRelativePath(baseFilePath: string, relativePath: string): string {
