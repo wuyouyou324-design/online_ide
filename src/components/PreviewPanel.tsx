@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useEffect, useRef } from 'react';
 import { FSItem } from '../types/ide';
 import { generatePreviewHtml } from '../utils/preview';
 import { Play } from 'lucide-react';
@@ -12,10 +12,39 @@ export const PreviewPanel: React.FC<PreviewPanelProps> = ({
   items,
   entryPath = '/index.html',
 }) => {
-  const preview = useMemo(
-    () => generatePreviewHtml(items, entryPath),
-    [items, entryPath]
-  );
+  const previousBlobUrlsRef = useRef<string[]>([]);
+
+  const preview = useMemo(() => {
+    return generatePreviewHtml(items, entryPath);
+  }, [items, entryPath]);
+
+  // Clean up previous blob URLs when a new preview is generated or on unmount
+  useEffect(() => {
+    const urlsToRevoke = previousBlobUrlsRef.current;
+    previousBlobUrlsRef.current = preview.blobUrls;
+
+    return () => {
+      urlsToRevoke.forEach((url) => {
+        try {
+          URL.revokeObjectURL(url);
+        } catch {
+          // Ignore revocation errors
+        }
+      });
+    };
+  }, [preview]);
+
+  useEffect(() => {
+    return () => {
+      previousBlobUrlsRef.current.forEach((url) => {
+        try {
+          URL.revokeObjectURL(url);
+        } catch {
+          // Ignore revocation errors
+        }
+      });
+    };
+  }, []);
 
   return (
     <div className="flex h-full w-full flex-col border-t border-gray-800 bg-gray-950">
@@ -33,7 +62,7 @@ export const PreviewPanel: React.FC<PreviewPanelProps> = ({
         <iframe
           title="HTML Preview"
           srcDoc={preview.html}
-          sandbox="allow-scripts allow-modals"
+          sandbox="allow-scripts allow-modals allow-same-origin"
           className="h-full w-full border-none"
         />
       </div>
