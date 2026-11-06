@@ -96,5 +96,48 @@ describe('Preview Utility Engine', () => {
       const preview = generatePreviewHtml(items);
       expect(preview.html).toContain('src="data:image/png;base64,iVBORw0KGgo="');
     });
+
+    it('ignores external CDN links and scripts while processing local ones', () => {
+      const items: Record<string, FSItem> = {
+        '/index.html': {
+          path: '/index.html',
+          name: 'index.html',
+          type: 'file',
+          content: '<link rel="stylesheet" href="https://cdn.example.com/style.css"><link rel="stylesheet" href="style.css"><script src="https://cdn.example.com/lib.js"></script><script src="script.js"></script>',
+        },
+        '/style.css': {
+          path: '/style.css',
+          name: 'style.css',
+          type: 'file',
+          content: 'body { margin: 0; }',
+        },
+        '/script.js': {
+          path: '/script.js',
+          name: 'script.js',
+          type: 'file',
+          content: 'console.log("local script");',
+        },
+      };
+      const preview = generatePreviewHtml(items);
+      expect(preview.html).toContain('href="https://cdn.example.com/style.css"');
+      expect(preview.html).toContain('src="https://cdn.example.com/lib.js"');
+      expect(preview.html).toContain('body { margin: 0; }');
+      expect(preview.html).toContain('console.log("local script");');
+    });
+
+    it('handles non-existent local references gracefully without throwing', () => {
+      const items: Record<string, FSItem> = {
+        '/index.html': {
+          path: '/index.html',
+          name: 'index.html',
+          type: 'file',
+          content: '<link rel="stylesheet" href="missing.css"><script src="missing.js"></script>',
+        },
+      };
+      const preview = generatePreviewHtml(items);
+      expect(preview.error).toBeUndefined();
+      expect(preview.html).toContain('href="missing.css"');
+      expect(preview.html).toContain('src="missing.js"');
+    });
   });
 });
